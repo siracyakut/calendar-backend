@@ -1,29 +1,21 @@
 const express = require("express");
-const webpush = require("web-push");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const webpush = require("./utils/webpush");
 require("dotenv").config();
 
 const Subscription = require("./models/subscription");
+const Task = require("./models/task");
 
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
-const publicVapidKey =
-  "BLuZvc7QBbQmH_GjUf2oA4PNN9OjxYA-v6jMUzP5pnBt-tlH7bGcEl--bg0GRl6jzgholdPb2zvIGPwjjs-sUmc";
-const privateVapidKey = "YdNUHEQmOk7C8r-NPtMwENYaAh11W6vTTK3cQ08Y_dQ";
-
-webpush.setVapidDetails(
-  "mailto:syakut@arkhe.com.tr",
-  publicVapidKey,
-  privateVapidKey,
-);
-
 app.post("/subscribe", async (req, res) => {
   try {
     const sub = req.body;
+
     await Subscription.findOneAndUpdate({ endpoint: sub.endpoint }, sub, {
       upsert: true,
       new: true,
@@ -37,31 +29,74 @@ app.post("/subscribe", async (req, res) => {
   }
 });
 
-app.get("/send", async (req, res) => {
-  const payload = JSON.stringify({
-    title: "PWA",
-    body: "Test mesajı gönderildi.",
-  });
+app.post("/send", async (req, res) => {
+  try {
+    const { title, message } = req.body;
 
-  const subs = await Subscription.find({});
-  const count = subs.length;
-  let sendCount = 0;
+    const payload = JSON.stringify({
+      title,
+      body: message,
+    });
 
-  for (const sub of subs) {
-    try {
-      await webpush.sendNotification(sub, payload);
-      sendCount++;
-    } catch (err) {
-      console.log("Push error:", err.statusCode);
-      if (err.statusCode === 410) {
-        await Subscription.deleteOne({ _id: sub._id });
+    const subs = await Subscription.find({});
+    const count = subs.length;
+    let sendCount = 0;
+
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification(sub, payload);
+        sendCount++;
+      } catch (err) {
+        console.log("Push error:", err.statusCode);
+        if (err.statusCode === 410) {
+          await Subscription.deleteOne({ _id: sub._id });
+        }
       }
     }
+
+    res.status(200).json({
+      success: true,
+      data: `Sended ${sendCount}/${count} notifications.`,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, data: e.message });
   }
+});
 
-  console.log(`Sended ${sendCount}/${count} notifications!`);
+app.get("/tasks", async (req, res) => {
+  try {
+    const tasks = await Task.find().sort({ date: 1 });
+    res.json({ success: true, data: tasks });
+  } catch (err) {
+    res.status(500).json({ success: false, data: err.message });
+  }
+});
 
-  res.json({ success: true });
+app.post("/add-task", async (req, res) => {
+  try {
+    const { title, message, date } = req.body;
+    if (!title || !message || !date) {
+      return res
+        .status(400)
+        .json({ success: false, data: "Eksik alanlar var." });
+    }
+
+    const task = await Task.create({ title, message, date });
+
+    res.status(201).json({ success: true, data: task });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete("/delete-task/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Task.findByIdAndDelete(id);
+    res.json({ success: true, data: "Görev silindi." });
+  } catch (err) {
+    res.status(500).json({ success: false, data: err.message });
+  }
 });
 
 app.get("/", (req, res) =>
