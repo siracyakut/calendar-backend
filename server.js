@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const cron = require("node-cron");
 const webpush = require("./utils/webpush");
 require("dotenv").config();
 
@@ -107,11 +108,51 @@ const PORT = process.env.PORT || 3000;
 
 mongoose
   .connect(process.env.CONN_URL)
-  .then(() =>
+  .then(() => {
     app.listen(PORT, () =>
       console.log(`Server ${PORT} portu uzerinde aktif edildi!`),
-    ),
-  )
+    );
+
+    cron.schedule("*/5 * * * * *", async () => {
+      console.log("tick");
+      const now = new Date();
+      const offsetNow = new Date(
+        now.getTime() - now.getTimezoneOffset() * 60000,
+      );
+      const fiveMinutesLater = new Date(offsetNow.getTime() + 60 * 60 * 1000);
+
+      const upcomingTasks = await Task.find({
+        date: { $gte: offsetNow, $lte: fiveMinutesLater },
+      });
+
+      console.log(upcomingTasks);
+
+      if (upcomingTasks.length === 0) return;
+
+      const subscriptions = await Subscription.find();
+
+      for (const task of upcomingTasks) {
+        const payload = JSON.stringify({
+          title: `Yaklaşan Görev: ${task.title}`,
+          message: task.message,
+          date: task.date,
+        });
+
+        for (const sub of subscriptions) {
+          try {
+            await webpush.sendNotification(sub, payload);
+          } catch (err) {
+            if (err.statusCode === 410 || err.statusCode === 404) {
+              await Subscription.deleteOne({ _id: sub._id });
+              console.log("Silinen abonelik:", sub.endpoint);
+            } else {
+              console.error("Bildirim hatası:", err);
+            }
+          }
+        }
+      }
+    });
+  })
   .catch((err) => {
     throw err;
   });
